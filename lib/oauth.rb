@@ -1,11 +1,11 @@
 require 'base64'
 require 'openssl'
 require 'uri'
+require 'securerandom'
 
 class OAuth
   class << self
 
-    EMPTY_STRING = ''.freeze
     SHA_BITS = '256'.freeze
 
     # Creates a Mastercard API compliant OAuth Authorization header
@@ -47,24 +47,7 @@ class OAuth
     #
     def extract_query_params(uri)
       query_params = URI.parse(uri).query
-
-      return {} if query_params.eql?(nil)
-
-      query_pairs = {}
-      pairs = query_params.split('&').sort_by(&:downcase)
-
-      pairs.each { |pair|
-        idx = pair.index('=')
-        key = idx > 0 ? pair[0..(idx - 1)] : pair
-        query_pairs[key] = [] unless query_pairs.include?(key)
-        value = if idx > 0 && pair.length > idx + 1
-                  pair[(idx + 1)..pair.length]
-                else
-                  EMPTY_STRING
-                end
-        query_pairs[key].push(value)
-      }
-      query_pairs
+      query_params.nil? ? {} : Hash[URI::decode_www_form(query_params)]
     end
 
     #
@@ -73,18 +56,14 @@ class OAuth
     # @return {Map}
     #
     def get_oauth_params(consumer_key, payload = nil)
-      oauth_params = {}
-
-      unless payload.nil?
-        oauth_params['oauth_body_hash'] = get_body_hash(payload)
-      end
-      oauth_params['oauth_consumer_key'] = consumer_key
-      oauth_params['oauth_nonce'] = get_nonce
-      oauth_params['oauth_signature_method'] = "RSA-SHA#{SHA_BITS}"
-      oauth_params['oauth_timestamp'] = time_stamp
-      oauth_params['oauth_version'] = '1.0'
-
-      oauth_params
+      {
+          'oauth_consumer_key' => consumer_key,
+          'oauth_nonce' => SecureRandom.hex,
+          'oauth_signature_method' => "RSA-SHA#{SHA_BITS}",
+          'oauth_timestamp' => time_stamp,
+          'oauth_version' => '1.0',
+          'oauth_body_hash' => (get_body_hash(payload) unless payload.nil?)
+      }.compact
     end
 
     #
@@ -135,11 +114,11 @@ class OAuth
         entry_key = entry[0]
         entry_val = entry[1]
         consolidated_params[entry_key] =
-          if consolidated_params.include?(entry_key)
-            entry_val
-          else
-            [].push(entry_val)
-          end
+            if consolidated_params.include?(entry_key)
+              entry_val
+            else
+              [].push(entry_val)
+            end
       }
 
       oauth_params = ''
@@ -177,12 +156,12 @@ class OAuth
     #
     def get_signature_base_string(http_method, base_uri, param_string)
       sbs =
-        # Uppercase HTTP method
-        "#{http_method.upcase}&" +
-        # Base URI
-        "#{encode_uri_component(base_uri)}&" +
-        # OAuth parameter string
-        encode_uri_component(param_string).to_s
+          # Uppercase HTTP method
+          "#{http_method.upcase}&" +
+              # Base URI
+              "#{encode_uri_component(base_uri)}&" +
+              # OAuth parameter string
+              encode_uri_component(param_string).to_s
 
       sbs.gsub(/!/, '%21')
     end
@@ -211,17 +190,6 @@ class OAuth
       Base64.strict_encode64(signature).chomp.gsub(/\n/, '')
     end
 
-    #
-    # Generates a hash based on request payload as per
-    # https://tools.ietf.org/id/draft-eaton-oauth-bodyhash-00.html
-    #
-    # @param {Any} payload Request payload
-    # @return {String} Base64 encoded cryptographic hash of the given payload
-    #
-    def get_body_hash(payload)
-      # Base 64 encodes the SHA1 digest of payload
-      Base64.strict_encode64(Digest::SHA256.digest(payload.nil? ? '' : payload))
-    end
 
     #
     # Encodes a text string as a valid component of a Uniform Resource Identifier (URI).
@@ -236,10 +204,23 @@ class OAuth
     # https://tools.ietf.org/html/rfc5849#section-3.3
     # @return {String} UUID with dashes removed
     #
-    def get_nonce(len = 32)
-      # Returns a random string of length=len
-      o = [('a'..'z'), ('A'..'Z'), (0..9)].map(&:to_a).flatten
-      (0...len).map { o[rand(o.length)] }.join
+    # def get_nonce(len = 32)
+    #   # Returns a random string of length=len
+    #   o = [('a'..'z'), ('A'..'Z'), (0..9)].map(&:to_a).flatten
+    #   (0...len).map {o[rand(o.length)]}.join
+    # end
+
+    private
+    #
+    # Generates a hash based on request payload as per
+    # https://tools.ietf.org/id/draft-eaton-oauth-bodyhash-00.html
+    #
+    # @param {Any} payload Request payload
+    # @return {String} Base64 encoded cryptographic hash of the given payload
+    #
+    def get_body_hash(payload)
+      # Base 64 encodes the SHA1 digest of payload
+      Base64.strict_encode64(Digest::SHA256.digest(payload.nil? ? '' : payload))
     end
 
     # Returns UNIX Timestamp as required per
@@ -249,5 +230,6 @@ class OAuth
     def time_stamp
       Time.now.getutc.to_i
     end
+
   end
 end
